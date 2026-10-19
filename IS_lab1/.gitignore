@@ -1,0 +1,5 @@
+target/
+.idea/
+*.iml
+scr/test/
+config/database.properties

@@ -1,0 +1,121 @@
+/* Общие стили */
+body {
+    font-family: Arial, sans-serif;
+    margin: 24px;
+    color: #222;
+}
+
+h1 {
+    font-size: 24px;
+}
+
+nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+/* Элементы форм */
+button,
+input,
+select {
+    font: inherit;
+    padding: 5px 8px;
+}
+
+button {
+    cursor: pointer;
+}
+
+button:disabled {
+    cursor: default;
+}
+
+label {
+    display: inline-block;
+    margin: 6px;
+}
+
+fieldset {
+    margin: 16px 0;
+}
+
+/* Таблицы */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+}
+
+th,
+td {
+    border: 1px solid #ccc;
+    padding: 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+th {
+    background: #eee;
+}
+
+.table-container {
+    overflow-x: auto;
+}
+
+/* Сообщения об ошибках */
+.error,
+#status {
+    color: #a32222;
+    white-space: pre-wrap;
+}
+
+/* Диалоговые окна */
+dialog {
+    max-width: 720px;
+    max-height: 85vh;
+    overflow: auto;
+    border: 1px solid #888;
+}
+
+dialog::backdrop {
+    background: #0005;
+}
+
+dialog label {
+    display: block;
+}
+
+dialog input,
+dialog select {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+}
+
+dialog form {
+    min-width: min(420px, 75vw);
+}
+
+.inline {
+    display: inline-block;
+    margin-left: 15px;
+}
+
+#username {
+    margin-left: auto;
+}
+
+.actions {
+    min-width: 130px;
+}
+
+.actions button {
+    margin: 2px;
+}
+
+[hidden] {
+    display: none !important;
+}

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Маршруты</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+</head>
+<body>
+<header>
+    <h1>ИС, лаба 1. Хлопцов С.Д., 409799</h1>
+    <nav>
+        <button data-page="routes">Маршруты</button>
+        <button data-page="references">Координаты и локации</button>
+        <button data-page="operations">Специальные операции</button>
+        <span id="username"></span>
+        <button id="logout">Выйти</button>
+    </nav>
+</header>
+<p id="status" role="status"></p>
+<main>
+<section id="routes">
+    <h2>Маршруты</h2>
+    <button id="create-route">Добавить маршрут</button>
+    <form id="find-form" class="inline">
+        <label>Найти по ID <input name="id" type="number" min="1" max="2147483647" required></label>
+        <button>Открыть</button>
+    </form>
+    <form id="filter-form">
+        <fieldset>
+            <legend>Фильтры по точному совпадению</legend>
+            <label><input type="checkbox" name="useName"> Название маршрута <input name="name"></label>
+            <label><input type="checkbox" name="useFromName"> Название начала <input name="fromName"></label>
+            <label><input type="checkbox" name="useToName"> Название конца <input name="toName"></label>
+            <label>Сортировать по <select name="sort" class="sort-fields"></select></label>
+            <label>Порядок <select name="direction"><option value="asc">По возрастанию</option><option value="desc">По убыванию</option></select></label>
+            <label>На странице <select name="size"><option>10</option><option>20</option><option>50</option></select></label>
+            <button>Применить</button><button type="button" id="reset-filters">Сбросить</button>
+        </fieldset>
+    </form>
+    <div id="route-table" class="table-container"></div>
+    <p><button id="previous">Назад</button> <span id="pagination"></span> <button id="next">Вперёд</button></p>
+</section>
+<section id="references" hidden>
+    <h2>Координаты</h2>
+    <button data-new="coordinates">Добавить координаты</button>
+    <div id="coordinates-table" class="table-container"></div>
+    <h2>Локации</h2>
+    <button data-new="locations">Добавить локацию</button>
+    <div id="locations-table" class="table-container"></div>
+    <p>Удаление координат или локации удаляет все связанные с ними маршруты.</p>
+</section>
+<section id="operations" hidden>
+    <h2>Специальные операции</h2>
+    <form id="rating-form">
+        <fieldset><legend>Операции с рейтингом</legend>
+            <label>Значение рейтинга <input name="rating" type="number" min="-2147483648" max="2147483647" required value="1"></label>
+            <label>Операция <select name="operation">
+                <option value="equal">Количество с равным рейтингом</option>
+                <option value="greater">Количество с большим рейтингом</option>
+                <option value="above">Все маршруты с большим рейтингом</option>
+            </select></label>
+            <button>Выполнить</button>
+        </fieldset>
+    </form>
+    <form id="between-form">
+        <fieldset><legend>Маршруты между локациями</legend>
+            <label>Начало <select name="from" data-reference="locations" required></select></label>
+            <label>Конец <select name="to" data-reference="locations" required></select></label>
+            <label>Операция <select name="operation">
+                <option value="shortest">Самый короткий</option>
+                <option value="longest">Самый длинный</option>
+                <option value="all">Все маршруты</option>
+            </select></label>
+            <label>Сортировать по <select name="sort" class="sort-fields"></select></label>
+            <label>Порядок <select name="direction"><option value="asc">По возрастанию</option><option value="desc">По убыванию</option></select></label>
+            <button>Выполнить</button>
+        </fieldset>
+    </form>
+    <p>Поиск учитывает направление: от начала к концу. Для самого короткого и длинного маршрута учитываются только известные расстояния. При равенстве выбирается маршрут с меньшим ID.</p>
+    <div id="operation-result" aria-live="polite"></div>
+</section>
+</main>
+<dialog id="route-dialog">
+    <h2 id="route-title"></h2>
+    <form id="route-form">
+        <label>Название <input name="name" required></label>
+        <label>Координаты <select name="coordinatesId" data-reference="coordinates" required></select></label>
+        <button type="button" data-new="coordinates">Новые координаты</button>
+        <label>Начало <select name="fromId" data-reference="locations" required></select></label>
+        <label>Конец (необязательно) <select name="toId" data-reference="locations"></select></label>
+        <button type="button" data-new="locations">Новая локация</button>
+        <label>Расстояние (необязательно, целое &gt; 1) <input name="distance" inputmode="numeric" pattern="[0-9]+"></label>
+        <label>Рейтинг <input name="rating" type="number" min="1" max="2147483647" required></label>
+        <p class="error" role="alert"></p>
+        <button>Сохранить</button><button type="button" data-close>Отмена</button>
+    </form>
+</dialog>
+<dialog id="reference-dialog">
+    <h2 id="reference-title"></h2>
+    <form id="reference-form">
+        <label>X <input name="x" required></label>
+        <label>Y <input name="y" required></label>
+        <label id="location-z">Z <input name="z"></label>
+        <label id="location-name">Название <input name="name" maxlength="345"></label>
+        <p class="error" role="alert"></p>
+        <button>Сохранить</button><button type="button" data-close>Отмена</button>
+    </form>
+</dialog>
+<dialog id="details-dialog">
+    <h2>Информация о маршруте</h2>
+    <div id="details"></div>
+    <p class="error" role="alert"></p>
+    <button id="edit-details">Изменить</button><button type="button" data-close>Закрыть</button>
+</dialog>
+<dialog id="delete-dialog">
+    <h2>Удаление</h2>
+    <p id="delete-description"></p>
+    <p class="error" role="alert"></p>
+    <button id="confirm-delete">Удалить</button><button type="button" data-close>Отмена</button>
+</dialog>
+</body>
+</html>
