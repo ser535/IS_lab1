@@ -1,6 +1,7 @@
 package ru.itmo.khlopensky.config;
 
 import jakarta.persistence.EntityManagerFactory;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,6 +15,7 @@ import java.util.Map;
 
 @Configuration
 @EnableTransactionManagement
+@EnableJpaRepositories("ru.itmo.khlopensky.repository")
 public class JpaConfig {
     @Bean
     @DependsOnDatabaseInitialization

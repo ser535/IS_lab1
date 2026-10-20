@@ -1,6 +1,11 @@
 package ru.itmo.khlopensky.service;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -13,33 +18,45 @@ import java.util.*;
 @Transactional
 public class RouteService {
     private final RouteRepository repository;
-    private final ReferenceRepository references;
+    private final CoordinatesRepository coordinatesRepository;
+    private final LocationRepository locationRepository;
     private final ReferenceService referenceService;
 
-    public RouteService(RouteRepository repository, ReferenceRepository references, ReferenceService referenceService) {
+    public RouteService(RouteRepository repository, CoordinatesRepository coordinatesRepository,
+                        LocationRepository locationRepository, ReferenceService referenceService) {
         this.repository = repository;
-        this.references = references;
+        this.coordinatesRepository = coordinatesRepository;
+        this.locationRepository = locationRepository;
         this.referenceService = referenceService;
     }
 
     @Transactional(readOnly = true)
     public RoutePage page(int page, int size, String name, String fromName, String toName, String sort, String direction) {
         if (page < 0 || size < 1 || size > 100) throw new IllegalArgumentException("Страница должна быть от 0, размер — от 1 до 100");
-        return repository.page(page, size, name, fromName, toName, sort, direction);
+        Sort sorting = sort(sort, direction);
+        Specification<Route> filter = (root, query, builder) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (name != null) predicates.add(builder.equal(root.get("name"), name));
+            if (fromName != null) predicates.add(builder.equal(root.get("from").get("name"), fromName));
+            if (toName != null) predicates.add(builder.equal(root.join("to", JoinType.LEFT).get("name"), toName));
+            return builder.and(predicates.toArray(Predicate[]::new));
+        };
+        long total = repository.count(filter);
+        int actualPage = (int) Math.min(page, Math.max(0, (total - 1) / size));
+        List<Route> items = repository.findAll(filter, PageRequest.of(actualPage, size, sorting)).getContent();
+        return new RoutePage(items, total, actualPage, size);
     }
 
     @Transactional(readOnly = true)
     public Route get(int id) {
-        Route route = repository.find(id);
-        if (route == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Маршрут не найден или уже удалён");
-        return route;
+        return repository.findById(id).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "Маршрут не найден или уже удалён"));
     }
 
     public Route create(RouteRequest request) {
         Route route = new Route();
         fill(route, request);
-        repository.save(route);
-        return route;
+        return repository.save(route);
     }
 
     public Route update(int id, RouteRequest request) {
@@ -58,22 +75,30 @@ public class RouteService {
         Location from = route.getFrom();
         Location to = route.getTo();
         repository.delete(route);
-        references.deleteUnusedCoordinates(coordinates);
-        references.deleteUnusedLocation(from);
-        if (to != null && !to.getId().equals(from.getId())) references.deleteUnusedLocation(to);
+        repository.flush();
+        if (!repository.existsByCoordinates_Id(coordinates.getId())) {
+            coordinatesRepository.delete(coordinates);
+        }
+        if (!repository.existsByFrom_IdOrTo_Id(from.getId(), from.getId())) {
+            locationRepository.delete(from);
+        }
+        if (to != null && !to.getId().equals(from.getId())
+                && !repository.existsByFrom_IdOrTo_Id(to.getId(), to.getId())) {
+            locationRepository.delete(to);
+        }
     }
 
     @Transactional(readOnly = true)
-    public long countRating(int rating, boolean greater) { return repository.countRating(rating, greater); }
+    public long countRating(int rating, boolean greater) { return greater ? repository.countByRatingGreaterThan(rating) : repository.countByRating(rating); }
 
     @Transactional(readOnly = true)
-    public List<Route> aboveRating(int rating) { return repository.aboveRating(rating); }
+    public List<Route> aboveRating(int rating) { return repository.findByRatingGreaterThanOrderByRatingAscIdAsc(rating); }
 
     @Transactional(readOnly = true)
     public List<Route> between(int from, int to, String sort, String direction) {
         referenceService.location(from);
         referenceService.location(to);
-        return repository.between(from, to, sort, direction);
+        return repository.findByFrom_IdAndTo_Id(from, to, sort(sort, direction));
     }
 
     @Transactional(readOnly = true)
@@ -84,6 +109,20 @@ public class RouteService {
         return routes.stream().filter(route -> route.getDistance() != null)
                 .min(comparator.thenComparing(Route::getId)).orElseThrow(() ->
                         new ResponseStatusException(HttpStatus.NOT_FOUND, "Нет маршрутов с известным расстоянием между этими локациями"));
+    }
+
+    private Sort sort(String field, String direction) {
+        String property = switch (field) {
+            case "id", "name", "creationDate", "distance", "rating" -> field;
+            case "fromName" -> "from.name";
+            case "toName" -> "to.name";
+            default -> throw new IllegalArgumentException("Недопустимые параметры сортировки");
+        };
+        if (!"asc".equals(direction) && !"desc".equals(direction)) {
+            throw new IllegalArgumentException("Недопустимые параметры сортировки");
+        }
+        Sort result = Sort.by(Sort.Direction.fromString(direction), property);
+        return field.equals("id") ? result : result.and(Sort.by("id"));
     }
 
     private void fill(Route route, RouteRequest request) {
