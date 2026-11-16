@@ -5,14 +5,16 @@ const state = {
     section: 'routes',
     coordinates: [],
     locations: [],
-    editId: null,
-    version: null,
     detailId: null,
     operation: null,
     deletion: null,
+    draft: null,
+    detailSnapshot: null,
+    detailDeleted: false,
+    saving: false,
 };
-let session;
-let refreshing = false;
+let refreshPromise;
+let refreshPending = false;
 const sortFields = {
     id: 'ID',
     name: 'Название',
@@ -23,7 +25,6 @@ const sortFields = {
     rating: 'Рейтинг',
 };
 
-const REFRESH_INTERVAL_MS = 2000;
 const LONG_MIN = -9223372036854775808n;
 const LONG_MAX = 9223372036854775807n;
 
@@ -56,20 +57,12 @@ async function api(path, options = {}) {
     if (options.body) {
         headers['Content-Type'] = 'application/json';
     }
-    if (session) {
-        headers[session.headerName] = session.token;
-    }
     const response = await fetch('/api' + path, { ...options, headers });
-    if (response.status === 401) {
-        window.location.href = '/login';
-        throw new Error('Войдите в систему');
-    }
     if (!response.ok) {
         const error = await response.json().catch(() => ({}));
-        const defaultMessage = response.status === 403
-            ? 'Сессия истекла. Перезагрузите страницу.'
-            : 'Ошибка запроса: ' + response.status;
-        throw new Error(error.message || defaultMessage);
+        const failure = new Error(error.message || 'Ошибка запроса: ' + response.status);
+        failure.status = response.status;
+        throw failure;
     }
     return response.status === 204 ? null : response.json();
 }
@@ -131,13 +124,13 @@ async function loadRoutes() {
 
 function updateReferenceSelects() {
     for (const select of document.querySelectorAll('[data-reference]')) {
-        // Не перестраиваем список, пока пользователь выбирает значение.
-        if (document.activeElement === select) {
-            continue;
-        }
-
         const selected = select.value;
-        const values = state[select.dataset.reference];
+        const values = [...state[select.dataset.reference]];
+        const retained = state.draft?.refs[select.name];
+        if (select.closest('#route-form') && retained && selected === String(retained.id)
+                && !values.some(value => value.id === retained.id)) {
+            values.push(retained);
+        }
         const format = select.dataset.reference === 'locations' ? locationText : coordinatesText;
         const options = '<option value="">Не выбрано</option>' + values
             .map(value => `<option value="${value.id}">${escapeHtml(format(value))}</option>`)
@@ -193,6 +186,7 @@ function renderLocationsTable() {
 }
 
 async function loadReferences() {
+    rememberSelections();
     [state.coordinates, state.locations] = await Promise.all([
         api('/coordinates'),
         api('/locations'),
@@ -203,38 +197,130 @@ async function loadReferences() {
     $('#locations-table').innerHTML = renderLocationsTable();
 }
 
-async function refresh() {
-    if (refreshing) {
-        return;
+function refresh() {
+    refreshPending = true;
+    if (!refreshPromise) {
+        refreshPromise = (async () => {
+            do {
+                refreshPending = false;
+                try {
+                    await loadReferences();
+                    if (state.section === 'routes') await loadRoutes();
+                    if (state.section === 'operations' && state.operation) await runOperation();
+                    if (!state.saving) {
+                        if ($('#route-dialog').open) await syncDraft();
+                        if ($('#details-dialog').open) await loadDetails();
+                    }
+                } catch (error) {
+                    $('#status').textContent = error.message;
+                }
+            } while (refreshPending);
+        })().finally(() => { refreshPromise = null; });
     }
-    refreshing = true;
-    try {
-        await loadReferences();
-        if (state.section === 'routes') {
-            await loadRoutes();
-        }
-        if (state.section === 'operations' && state.operation) {
-            await runOperation();
-        }
-        if ($('#details-dialog').open) {
-            await loadDetails();
-        }
-        $('#status').textContent = '';
-    } catch (error) {
-        $('#status').textContent = error.message;
-    } finally {
-        refreshing = false;
+    return refreshPromise;
+}
+
+const routeFields = {
+    name: 'Название', coordinatesId: 'Координаты', fromId: 'Начало',
+    toId: 'Конец', distance: 'Расстояние', rating: 'Рейтинг',
+};
+
+function routeValues(route) {
+    return {
+        name: route.name,
+        coordinatesId: String(route.coordinates.id),
+        fromId: String(route.from.id),
+        toId: route.to ? String(route.to.id) : '',
+        distance: route.distance == null ? '' : String(route.distance),
+        rating: String(route.rating),
+    };
+}
+
+function rememberSelections() {
+    if (!state.draft || !$('#route-dialog').open) return;
+    for (const [name, type] of Object.entries({ coordinatesId: 'coordinates', fromId: 'locations', toId: 'locations' })) {
+        const id = Number($('#route-form').elements[name].value);
+        const reference = state[type].find(value => value.id === id);
+        if (reference) state.draft.refs[name] = reference;
+        else if (!id) state.draft.refs[name] = null;
     }
 }
 
-async function editRoute(id = null) {
-    const route = id ? await api('/routes/' + id) : null;
+function missingReferences(draft) {
+    return Object.entries(draft.refs).filter(([field, value]) => value &&
+        !state[field === 'coordinatesId' ? 'coordinates' : 'locations'].some(item => item.id === value.id));
+}
+
+function showDraftNotice() {
+    const draft = state.draft;
+    if (!draft) return;
+    const messages = [...draft.notices];
+    const missing = missingReferences(draft);
+    if (draft.deleted || missing.length) {
+        const removed = [draft.deleted ? 'Маршрут' : '', ...missing.map(([field]) => routeFields[field])].filter(Boolean);
+        messages.push(`${removed.join(', ')} удалены другим пользователем. Нажмите «Сохранить», чтобы создать заново с новыми ID, или «Отмена», чтобы закрыть форму без восстановления.`);
+    }
+    $('#route-notice').textContent = messages.join('\n');
+}
+
+async function syncDraft() {
+    const draft = state.draft;
+    if (!draft) return;
+    rememberSelections();
+    if (draft.id && !draft.deleted) {
+        try {
+            const latest = await api('/routes/' + draft.id);
+            if (state.draft !== draft || !$('#route-dialog').open || state.saving) return;
+            const values = routeValues(latest);
+            const form = $('#route-form');
+            for (const field of Object.keys(routeFields)) {
+                if (values[field] === draft.base[field]) continue;
+                const localChanged = form.elements[field].value !== draft.base[field];
+                draft.notices.add(`Другой пользователь изменил поле «${routeFields[field]}». ` +
+                    (localChanged ? 'Ваш ввод сохранён; при сохранении он заменит чужое значение.' : 'Подставлено новое значение.'));
+                if (!localChanged) {
+                    const reference = { coordinatesId: latest.coordinates, fromId: latest.from, toId: latest.to }[field];
+                    if (reference) {
+                        const select = form.elements[field];
+                        if (![...select.options].some(option => option.value === String(reference.id))) {
+                            select.add(new Option(field === 'coordinatesId' ? coordinatesText(reference) : locationText(reference), reference.id));
+                        }
+                        draft.refs[field] = reference;
+                    }
+                    form.elements[field].value = values[field];
+                }
+            }
+            draft.base = values;
+            draft.version = latest.version;
+            rememberSelections();
+        } catch (error) {
+            if (state.draft !== draft || state.saving) return;
+            if (error.status !== 404) throw error;
+            draft.deleted = true;
+        }
+    }
+    showDraftNotice();
+}
+
+async function editRoute(id = null, snapshot = null) {
+    const route = snapshot || (id ? await api('/routes/' + id) : null);
     await loadReferences();
-    state.editId = id;
-    state.version = route?.version ?? null;
+    state.draft = {
+        id: route?.id ?? null,
+        version: route?.version ?? null,
+        base: route ? routeValues(route) : {},
+        refs: { coordinatesId: route?.coordinates, fromId: route?.from, toId: route?.to },
+        deleted: Boolean(snapshot),
+        notices: new Set(),
+    };
     const form = $('#route-form');
     form.reset();
     if (route) {
+        for (const [field, reference] of Object.entries(state.draft.refs)) {
+            if (reference && ![...form.elements[field].options].some(option => option.value === String(reference.id))) {
+                form.elements[field].add(new Option(field === 'coordinatesId' ? coordinatesText(reference) : locationText(reference), reference.id));
+            }
+        }
         const values = {
             name: route.name,
             coordinatesId: route.coordinates.id,
@@ -252,11 +338,25 @@ async function editRoute(id = null) {
     $('#route-title').textContent = id ? `Изменение маршрута #${id}` : 'Новый маршрут';
     form.querySelector('.error').textContent = '';
     $('#route-dialog').showModal();
+    rememberSelections();
+    showDraftNotice();
+    await syncDraft();
 }
 
 async function loadDetails() {
     try {
-        const route = await api('/routes/' + state.detailId);
+        const id = state.detailId;
+        const route = await api('/routes/' + id);
+        if (state.detailId !== id) return;
+        if (state.detailSnapshot) {
+            const previous = routeValues(state.detailSnapshot);
+            const current = routeValues(route);
+            const changed = Object.keys(routeFields).filter(field => current[field] !== previous[field]);
+            if (changed.length) $('#details-notice').textContent = 'Другой пользователь изменил поля: ' + changed.map(field => routeFields[field]).join(', ') + '.';
+        }
+        state.detailSnapshot = route;
+        state.detailDeleted = false;
+        $('#restore-details').hidden = true;
         const fields = [
             ['ID', route.id],
             ['Название', route.name],
@@ -274,14 +374,23 @@ async function loadDetails() {
         $('#details-dialog .error').textContent = '';
         $('#edit-details').disabled = false;
     } catch (error) {
-        $('#details').textContent = '';
-        $('#details-dialog .error').textContent = error.message;
-        $('#edit-details').disabled = true;
+        if (error.status === 404 && state.detailSnapshot) {
+            state.detailDeleted = true;
+            $('#details-notice').textContent = 'Маршрут или связанные координаты/локации удалены другим пользователем. Нажмите «Сохранить», чтобы создать заново, или «Отмена», чтобы закрыть окно без восстановления.';
+            $('#restore-details').hidden = false;
+        } else {
+            $('#details-dialog .error').textContent = error.message;
+        }
     }
 }
 
 async function viewRoute(id) {
     state.detailId = id;
+    state.detailSnapshot = null;
+    state.detailDeleted = false;
+    $('#details').textContent = '';
+    $('#details-notice').textContent = '';
+    $('#restore-details').hidden = true;
     await loadDetails();
     $('#details-dialog').showModal();
 }
@@ -373,14 +482,68 @@ async function saveRoute(data) {
         // Long передаём строкой, чтобы JavaScript не округлил большое число.
         distance: data.distance || null,
         rating: Number(data.rating),
-        version: state.version,
+        version: state.draft.version,
     };
-    const path = state.editId ? `/routes/${state.editId}` : '/routes';
-    await api(path, {
-        method: state.editId ? 'PUT' : 'POST',
-        body: JSON.stringify(body),
-    });
-    $('#route-dialog').close();
+    rememberSelections();
+    const draft = state.draft;
+    const recreate = draft.deleted || missingReferences(draft).length > 0;
+    state.saving = true;
+    try {
+        await api('/routes/save', {
+            method: 'POST',
+            body: JSON.stringify(draftRequest(draft, { ...body, version: draft.version }, recreate)),
+        });
+        $('#route-dialog').close();
+        state.draft = null;
+    } catch (error) {
+        state.saving = false;
+        await refresh();
+        throw error;
+    } finally {
+        state.saving = false;
+    }
+    await refresh();
+}
+
+function draftRequest(draft, route, recreateDeleted) {
+    const { coordinatesId: coordinates, fromId: from, toId: to } = draft.refs;
+    const location = value => value ? { x: value.x, y: value.y, z: value.z, name: value.name } : null;
+    return {
+        id: draft.id,
+        recreateDeleted,
+        route,
+        coordinates: coordinates ? { x: coordinates.x, y: coordinates.y } : null,
+        from: location(from),
+        to: location(to),
+    };
+}
+
+async function restoreDetails(button) {
+    const route = state.detailSnapshot;
+    if (!route) return;
+    button.disabled = true;
+    state.saving = true;
+    try {
+        const restored = await api('/routes/save', {
+            method: 'POST',
+            body: JSON.stringify(draftRequest({ id: route.id, refs: {
+                coordinatesId: route.coordinates, fromId: route.from, toId: route.to,
+            } }, {
+                name: route.name, coordinatesId: route.coordinates.id, fromId: route.from.id,
+                toId: route.to?.id ?? null, distance: route.distance, rating: route.rating, version: route.version,
+            }, true)),
+        });
+        state.detailId = restored.id;
+        state.detailSnapshot = restored;
+        state.detailDeleted = false;
+        $('#details-notice').textContent = `Создан новый маршрут #${restored.id}.`;
+        $('#restore-details').hidden = true;
+    } catch (error) {
+        $('#details-dialog .error').textContent = error.message;
+    } finally {
+        button.disabled = false;
+        state.saving = false;
+    }
     await refresh();
 }
 
@@ -510,7 +673,7 @@ async function handleClick(event) {
                 break;
             case 'edit-details':
                 $('#details-dialog').close();
-                await editRoute(state.detailId);
+                await editRoute(state.detailId, state.detailDeleted ? state.detailSnapshot : null);
                 break;
             case 'previous':
                 state.page--;
@@ -529,12 +692,8 @@ async function handleClick(event) {
             case 'confirm-delete':
                 await confirmDelete(button);
                 break;
-            case 'logout':
-                await fetch('/logout', {
-                    method: 'POST',
-                    headers: { [session.headerName]: session.token },
-                });
-                window.location.href = '/login?logout';
+            case 'restore-details':
+                await restoreDetails(button);
                 break;
         }
     } catch (error) {
@@ -550,6 +709,30 @@ function bindEvents() {
     submit('#rating-form', runRatingOperation);
     submit('#between-form', runBetweenOperation);
     document.addEventListener('click', handleClick);
+    $('#route-form').addEventListener('change', () => {
+        rememberSelections();
+        showDraftNotice();
+    });
+    $('#route-dialog').addEventListener('close', () => { state.draft = null; });
+    window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
+}
+
+function connectChanges() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/changes`);
+    socket.onopen = () => {
+        $('#connection-status').textContent = '';
+        refresh();
+    };
+    socket.onmessage = event => {
+        if (event.data === 'changed') refresh();
+    };
+    socket.onclose = () => {
+        $('#connection-status').textContent = 'Связь с сервером прервана. Переподключаемся; введённые данные сохранены в открытой форме.';
+        setTimeout(connectChanges, 2000);
+    };
+    socket.onerror = () => socket.close();
 }
 
 async function init() {
@@ -562,10 +745,8 @@ async function init() {
     }
 
     bindEvents();
-    session = await api('/session');
-    $('#username').textContent = session.username;
     await refresh();
-    setInterval(refresh, REFRESH_INTERVAL_MS);
+    connectChanges();
 }
 
 init().catch(error => {

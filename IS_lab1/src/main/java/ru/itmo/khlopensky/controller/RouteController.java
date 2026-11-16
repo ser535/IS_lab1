@@ -17,7 +17,7 @@ public class RouteController {
 
     @GetMapping
     public RoutePage list(@RequestParam(defaultValue = "0") int page,
-                          @RequestParam(defaultValue = "10") int size,
+                          @RequestParam(defaultValue = "5") int size,
                           @RequestParam(required = false) String name,
                           @RequestParam(required = false) String fromName,
                           @RequestParam(required = false) String toName,
@@ -32,6 +32,9 @@ public class RouteController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Route create(@Valid @RequestBody RouteRequest request) { return service.create(request); }
+
+    @PostMapping("/save")
+    public Route saveDraft(@Valid @RequestBody RouteDraft request) { return service.saveDraft(request); }
 
     @PutMapping("/{id}")
     public Route update(@PathVariable int id, @Valid @RequestBody RouteRequest request) { return service.update(id, request); }

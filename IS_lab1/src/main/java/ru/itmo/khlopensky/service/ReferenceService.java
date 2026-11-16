@@ -1,6 +1,8 @@
 package ru.itmo.khlopensky.service;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
+import ru.itmo.khlopensky.config.ChangeSocket;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -13,15 +15,17 @@ import java.util.List;
 @Service
 @Transactional
 public class ReferenceService {
+    private final ApplicationEventPublisher events;
     private final CoordinatesRepository coordinatesRepository;
     private final LocationRepository locationRepository;
     private final RouteRepository routeRepository;
 
     public ReferenceService(CoordinatesRepository coordinatesRepository, LocationRepository locationRepository,
-                            RouteRepository routeRepository) {
+                            RouteRepository routeRepository, ApplicationEventPublisher events) {
         this.coordinatesRepository = coordinatesRepository;
         this.locationRepository = locationRepository;
         this.routeRepository = routeRepository;
+        this.events = events;
     }
 
     @Transactional(readOnly = true)
@@ -50,6 +54,7 @@ public class ReferenceService {
         Coordinates result = new Coordinates();
         result.setX(request.x());
         result.setY(request.y());
+        events.publishEvent(new ChangeSocket.Changed());
         return coordinatesRepository.save(result);
     }
 
@@ -59,6 +64,7 @@ public class ReferenceService {
         result.setY(request.y());
         result.setZ(request.z());
         result.setName(request.name());
+        events.publishEvent(new ChangeSocket.Changed());
         return locationRepository.save(result);
     }
 
@@ -66,11 +72,13 @@ public class ReferenceService {
         Coordinates coordinates = coordinates(id);
         routeRepository.deleteByCoordinatesId(id);
         coordinatesRepository.delete(coordinates);
+        events.publishEvent(new ChangeSocket.Changed());
     }
 
     public void deleteLocation(int id) {
         Location location = location(id);
         routeRepository.deleteByLocationId(id);
         locationRepository.delete(location);
+        events.publishEvent(new ChangeSocket.Changed());
     }
 }

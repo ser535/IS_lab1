@@ -14,16 +14,15 @@
         <button data-page="routes">Маршруты</button>
         <button data-page="references">Координаты и локации</button>
         <button data-page="operations">Специальные операции</button>
-        <span id="username"></span>
-        <button id="logout">Выйти</button>
     </nav>
 </header>
 <p id="status" role="status"></p>
+<p id="connection-status" class="notice" role="status"></p>
 <main>
 <section id="routes">
     <h2>Маршруты</h2>
     <button id="create-route">Добавить маршрут</button>
-    <form id="find-form" class="inline">
+    <form id="find-form" class="inline" autocomplete="off">
         <label>Найти по ID <input name="id" type="number" min="1" max="2147483647" required></label>
         <button>Открыть</button>
     </form>
@@ -33,10 +32,12 @@
             <label><input type="checkbox" name="useName"> Название маршрута <input name="name"></label>
             <label><input type="checkbox" name="useFromName"> Название начала <input name="fromName"></label>
             <label><input type="checkbox" name="useToName"> Название конца <input name="toName"></label>
-            <label>Сортировать по <select name="sort" class="sort-fields"></select></label>
-            <label>Порядок <select name="direction"><option value="asc">По возрастанию</option><option value="desc">По убыванию</option></select></label>
-            <label>На странице <select name="size"><option>10</option><option>20</option><option>50</option></select></label>
-            <button>Применить</button><button type="button" id="reset-filters">Сбросить</button>
+            <div class="filter-controls">
+                <label>Сортировать по <select name="sort" class="sort-fields"></select></label>
+                <label>Порядок <select name="direction"><option value="asc">По возрастанию</option><option value="desc">По убыванию</option></select></label>
+                <label>На странице <select name="size"><option>5</option><option>10</option><option>20</option><option>50</option></select></label>
+                <button>Применить</button><button type="button" id="reset-filters">Сбросить</button>
+            </div>
         </fieldset>
     </form>
     <div id="route-table" class="table-container"></div>
@@ -49,7 +50,7 @@
     <h2>Локации</h2>
     <button data-new="locations">Добавить локацию</button>
     <div id="locations-table" class="table-container"></div>
-    <p>Удаление координат или локации удаляет все связанные с ними маршруты.</p>
+    <p>Удаление координат или локации удаляет все связанные с ними маршруты</p>
 </section>
 <section id="operations" hidden>
     <h2>Специальные операции</h2>
@@ -78,13 +79,14 @@
             <button>Выполнить</button>
         </fieldset>
     </form>
-    <p>Поиск учитывает направление: от начала к концу. Для самого короткого и длинного маршрута учитываются только известные расстояния. При равенстве выбирается маршрут с меньшим ID.</p>
+    <p>Для самого короткого и длинного маршрута учитываются только известные расстояния. При равенстве выбирается маршрут с меньшим ID.</p>
     <div id="operation-result" aria-live="polite"></div>
 </section>
 </main>
 <dialog id="route-dialog">
     <h2 id="route-title"></h2>
     <form id="route-form">
+        <p id="route-notice" class="notice" role="status"></p>
         <label>Название <input name="name" required></label>
         <label>Координаты <select name="coordinatesId" data-reference="coordinates" required></select></label>
         <button type="button" data-new="coordinates">Новые координаты</button>
@@ -110,9 +112,11 @@
 </dialog>
 <dialog id="details-dialog">
     <h2>Информация о маршруте</h2>
+    <p id="details-notice" class="notice" role="status"></p>
     <div id="details"></div>
     <p class="error" role="alert"></p>
-    <button id="edit-details">Изменить</button><button type="button" data-close>Закрыть</button>
+    <button id="restore-details" hidden>Сохранить</button>
+    <button id="edit-details">Изменить</button><button type="button" data-close>Отмена</button>
 </dialog>
 <dialog id="delete-dialog">
     <h2>Удаление</h2>

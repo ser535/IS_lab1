@@ -1,6 +1,8 @@
 package ru.itmo.khlopensky.service;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
+import ru.itmo.khlopensky.config.ChangeSocket;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -17,14 +19,16 @@ import java.util.*;
 @Service
 @Transactional
 public class RouteService {
+    private final ApplicationEventPublisher events;
     private final RouteRepository repository;
     private final CoordinatesRepository coordinatesRepository;
     private final LocationRepository locationRepository;
     private final ReferenceService referenceService;
 
     public RouteService(RouteRepository repository, CoordinatesRepository coordinatesRepository,
-                        LocationRepository locationRepository, ReferenceService referenceService) {
+                        LocationRepository locationRepository, ReferenceService referenceService, ApplicationEventPublisher events) {
         this.repository = repository;
+        this.events = events;
         this.coordinatesRepository = coordinatesRepository;
         this.locationRepository = locationRepository;
         this.referenceService = referenceService;
@@ -56,6 +60,7 @@ public class RouteService {
     public Route create(RouteRequest request) {
         Route route = new Route();
         fill(route, request);
+        events.publishEvent(new ChangeSocket.Changed());
         return repository.save(route);
     }
 
@@ -65,7 +70,48 @@ public class RouteService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Маршрут уже изменён другим пользователем. Откройте окно изменения заново.");
         }
         fill(route, request);
+        events.publishEvent(new ChangeSocket.Changed());
         return route;
+    }
+
+    public Route saveDraft(RouteDraft request) {
+        RouteRequest values = request.route();
+        Route route = request.id() == null ? new Route() : repository.findById(request.id()).orElse(null);
+        if (route == null) {
+            if (!request.recreateDeleted()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Маршрут удалён. Подтвердите повторное создание.");
+            }
+            route = new Route();
+        } else if (route.getId() != null && (values.version() == null || values.version() != route.getVersion())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Маршрут изменён. Проверьте изменения и сохраните ещё раз.");
+        }
+        Coordinates coordinates = coordinatesRepository.findById(values.coordinatesId()).orElse(null);
+        if (coordinates == null) {
+            if (!request.recreateDeleted() || request.coordinates() == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Координаты удалены. Подтвердите повторное создание.");
+            }
+            coordinates = referenceService.create(request.coordinates());
+        }
+        Location from = restoreLocation(values.fromId(), request.from(), request.recreateDeleted());
+        Location to = values.toId() == null ? null : values.toId().equals(values.fromId()) ? from
+                : restoreLocation(values.toId(), request.to(), request.recreateDeleted());
+        route.setName(values.name());
+        route.setCoordinates(coordinates);
+        route.setFrom(from);
+        route.setTo(to);
+        route.setDistance(values.distance());
+        route.setRating(values.rating());
+        events.publishEvent(new ChangeSocket.Changed());
+        return repository.save(route);
+    }
+
+    private Location restoreLocation(int id, LocationRequest snapshot, boolean recreate) {
+        return locationRepository.findById(id).orElseGet(() -> {
+            if (!recreate || snapshot == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Локация удалена. Подтвердите повторное создание.");
+            }
+            return referenceService.create(snapshot);
+        });
     }
 
     public void delete(int id, long version) {
@@ -75,6 +121,7 @@ public class RouteService {
         Location from = route.getFrom();
         Location to = route.getTo();
         repository.delete(route);
+        events.publishEvent(new ChangeSocket.Changed());
         repository.flush();
         if (!repository.existsByCoordinates_Id(coordinates.getId())) {
             coordinatesRepository.delete(coordinates);
